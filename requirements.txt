@@ -1,0 +1,5 @@
+streamlit
+matplotlib
+pandas  # Ajoutez cette ligne si vous utilisez la bibliothèque pandas
+numpy   # Ajoutez cette ligne si vous utilisez la bibliothèque numpy
+# Ajoutez ici toutes les autres bibliothèques que vous importez
