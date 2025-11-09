@@ -428,7 +428,7 @@ if st.session_state.is_running:
                 st.session_state.sensor_data[k] = st.session_state.sensor_data[k][-200:]
         # small delay, then rerun the script to get next frame
         time.sleep(st.session_state.delay_ms / 1000.0)
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.session_state.is_running = False
         st.success("Simulation terminée.")
