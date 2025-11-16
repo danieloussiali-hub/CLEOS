@@ -1,6 +1,3 @@
-
-
-
 import time
 import random
 import heapq
@@ -83,10 +80,6 @@ def dfs_search(maze, sx, sy):
             if 0 <= ny < MAZE_SIZE and 0 <= nx < MAZE_SIZE and maze[ny][nx] != 1 and (nx, ny) not in visited:
                 visited.add((nx, ny)); stack.append(((nx, ny), path_history + [(nx, ny)]))
     return {'path': [(sx, sy)], 'visited': visited}
-
-# Note: bfs_search, floodFill, tremaux_algorithm, ai_based_learning (A* simple)
-# sont conservés dans le code original, mais dfs_search est utilisé par défaut
-# pour la cartographie (Passage 1) dans run_simulation.
 
 # --- Fonction Planification (Passage 2: A* optimisé) ---
 
@@ -264,9 +257,6 @@ def plot_maze_and_path(maze, path_data, current_frame, highlight_path=None):
     fig.tight_layout()
     return fig
 
-# -------------------------------------------------------------
-# DÉBUT DE LA MODIFICATION
-# -------------------------------------------------------------
 def plot_sensor_graphs():
     config_key = st.session_state.config
     titles = {
@@ -279,7 +269,6 @@ def plot_sensor_graphs():
     limits_and_units = get_sensor_limits_and_units(config_key)
     figs = []
     
-    # Correction : Définir les couleurs et le style de ligne séparément
     COLORS = ['#F05454', '#00ADB5', '#FFD369']
     LINESTYLE = '-'
 
@@ -292,9 +281,7 @@ def plot_sensor_graphs():
         if data:
             times = [d[0] for d in data]; values = [d[1] for d in data]
             
-            # --- LIGNE CLÉ CORRIGÉE (Ancienne: ax.plot(times, values, ['#F05454','#00ADB5','#FFD369'][i]+'-', linewidth=1)) ---
             ax.plot(times, values, color=COLORS[i], linestyle=LINESTYLE, linewidth=1) 
-            # --- FIN CORRECTION ---
             
         min_val, max_val, unit = limits_and_units[i]
         ax.set_ylim(min_val, max_val); ax.set_ylabel(unit, fontsize=8, color='#EEEEEE')
@@ -304,9 +291,6 @@ def plot_sensor_graphs():
         fig.tight_layout()
         figs.append(fig)
     return figs
-# -------------------------------------------------------------
-# FIN DE LA MODIFICATION
-# -------------------------------------------------------------
 
 # --- Streamlit App UI & State Management ---
 
@@ -450,12 +434,19 @@ with st.sidebar:
     s_x = max(1, min(MAZE_SIZE - 2, s_x)); s_y = max(1, min(MAZE_SIZE - 2, s_y))
     e_x = max(1, min(MAZE_SIZE - 2, e_x)); e_y = max(1, min(MAZE_SIZE - 2, e_y))
     
+# -------------------------------------------------------------
+# DÉBUT DE LA MODIFICATION DE VÉRIFICATION
+# -------------------------------------------------------------
+    # Lignes 599-601: Vérification de la syntaxe du tuple (X, Y)
     st.session_state.start_pos = (st.number_input("X Départ", min_value=1, max_value=MAZE_SIZE-2, value=int(s_x), step=1), 
-                                  st.number_input("Y Départ", min_value=1, max_value=MAZE_SIZE-2, value=int(s_y), step=1))
-    
+                                  st.number_input("Y Départ", min_value=1, max_value=MAZE_SIZE-2, value=int(s_y), step=1)) # Ligne 601 dans la trace d'erreur
+
     st.session_state.end_pos = (st.number_input("X Arrivée", min_value=1, max_value=MAZE_SIZE-2, value=int(e_x), step=1),
                                 st.number_input("Y Arrivée", min_value=1, max_value=MAZE_SIZE-2, value=int(e_y), step=1))
-
+# -------------------------------------------------------------
+# FIN DE LA MODIFICATION DE VÉRIFICATION
+# -------------------------------------------------------------
+    
     st.subheader("Contrôles")
     if st.button("▶ Lancer la Simulation (3 Passages)"):
         run_simulation()
@@ -598,4 +589,3 @@ if st.session_state.is_running:
         st.session_state.is_running = False
         st.session_state.stage = "Terminé"
         st.rerun()
-```
