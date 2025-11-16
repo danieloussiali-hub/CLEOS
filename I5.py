@@ -48,38 +48,78 @@ def create_all_mazes():
     
     return mazes
 
-# Fonctions d'exploration (Passage 1)
+# --- Fonctions d'exploration (Passage 1) ---
+
 def wall_follow(maze, sx, sy, sh, right_hand=False):
+    start_time = time.time() # Chrono
     path = [(sx, sy)]; visited = set([(sx, sy)]); x, y, heading = sx, sy, sh
     rows, cols = maze.shape
-    for _ in range(MAZE_SIZE * MAZE_SIZE * 5): 
+    
+    # Limiter l'exploration à la taille du labyrinthe * 5 pour éviter les boucles infinies
+    max_steps = MAZE_SIZE * MAZE_SIZE * 5 
+    steps = 0
+    
+    while steps < max_steps:
         if maze[y][x] == 3: break
+        
         turn = 1 if right_hand else -1
         turn_heading = (heading + turn) % 4
         dy, dx = DIRECTIONS[turn_heading]; turn_y, turn_x = y + dy, x + dx
         
+        # 1. Vérifier si on peut tourner (la main touche le mur)
         if 0 <= turn_y < rows and 0 <= turn_x < cols and maze[turn_y][turn_x] != 1:
             heading = turn_heading; x, y = turn_x, turn_y
         else:
+            # 2. Avancer tout droit
             dy, dx = DIRECTIONS[heading]; next_y, next_x = y + dy, x + dx
             if 0 <= next_y < rows and 0 <= next_x < cols and maze[next_y][next_x] != 1: 
                 x, y = next_x, next_y
             else: 
-                heading = (heading - turn) % 4; continue
+                # 3. Tourner dans l'autre sens
+                heading = (heading - turn) % 4; steps += 1; continue
                 
-        path.append((x, y)); visited.add((x, y));
-    return {'path': path, 'visited': visited}
+        path.append((x, y)); visited.add((x, y)); steps += 1
+        
+    end_time = time.time()
+    return {'path': path, 'visited': visited, 'time': end_time - start_time}
 
 def dfs_search(maze, sx, sy):
+    start_time = time.time() # Chrono
+    
+    # Utilisation d'un labyrinthe "map" pour stocker uniquement les murs rencontrés.
+    # On initialise tout à '1' (mur/inconnu) sauf les bords qui restent à '1' (mur réel)
+    mapped_maze = np.ones_like(maze) 
+    rows, cols = maze.shape
+    mapped_maze[sy, sx] = 0 # Le départ est connu
+    
     stack = [((sx, sy), [(sx, sy)])]; visited = {(sx, sy)}
+    
+    # Exploration pour cartographier tout le labyrinthe accessible
     while stack:
         (x, y), path_history = stack.pop()
-        if maze[y][x] == 3: return {'path': path_history, 'visited': visited}
+        
+        # Mettre à jour les informations du mur/passage pour la cellule actuelle
+        if maze[y][x] != 1:
+            mapped_maze[y][x] = maze[y][x] if maze[y][x] in [2, 3] else 0
+        
         for dy, dx in DIRECTIONS:
             nx, ny = x + dx, y + dy
-            if 0 <= ny < MAZE_SIZE and 0 <= nx < MAZE_SIZE and maze[ny][nx] != 1 and (nx, ny) not in visited:
-                visited.add((nx, ny)); stack.append(((nx, ny), path_history + [(nx, ny)]))
-    return {'path': [(sx, sy)], 'visited': visited}
+            
+            if 0 <= ny < rows and 0 <= nx < cols:
+                
+                # Mise à jour de la carte: si c'est un mur, on le note sur la carte
+                if maze[ny][nx] == 1:
+                    mapped_maze[ny][nx] = 1 # Le mur est révélé
+                
+                if maze[ny][nx] != 1 and (nx, ny) not in visited:
+                    visited.add((nx, ny))
+                    # La path_history est pour le chemin d'exploration, pas pour le chemin final
+                    stack.append(((nx, ny), path_history + [(nx, ny)]))
+    
+    end_time = time.time()
+    
+    # On utilise le labyrinthe "révélé" (mapped_maze) pour le Passage 2
+    return {'path': path_history, 'visited': visited, 'time': end_time - start_time, 'mapped_maze': mapped_maze}
 
 # --- Fonction Planification (Passage 2: A* optimisé) ---
 
@@ -88,24 +128,36 @@ def calculate_best_path(mapped_maze, start_pos, end_pos):
     sx, sy = start_pos; ex, ey = end_pos
 
     def get_cost(path):
+        """Calcule le coût total (temps) d'un chemin, incluant la pénalité de virage."""
+        if not path or len(path) <= 1: return 0.0, 0
+        
+        # Coût de base: temps passé à avancer
         time_cost = (len(path) - 1) * TIME_PER_CELL_MAX_S
-        turn_cost = 0
+        turn_count = 0
+        
         if len(path) > 1:
             for i in range(1, len(path) - 1):
                 px, py = path[i-1]; cx, cy = path[i]; nx, ny = path[i+1]
                 dx_curr = cx - px; dy_curr = cy - py
                 dx_next = nx - cx; dy_next = ny - cy
+                
+                # Vérification du changement de direction
                 if dx_curr != dx_next or dy_curr != dy_next:
-                    turn_cost += TURN_PENALTY_S
-        return time_cost + turn_cost
+                    turn_count += 1
+        
+        time_cost += turn_count * TURN_PENALTY_S
+        return time_cost, turn_count
 
     def heuristic(x, y):
-        return abs(ex - x) + abs(ey - y)
+        """Heuristique: Distance de Manhattan (estimation du temps minimum restant)."""
+        return (abs(ex - x) + abs(ey - y)) * TIME_PER_CELL_MAX_S
 
-    # (f_score, g_score, x, y, path, last_dx, last_dy)
+    # Open set stocke: (f_score, g_score, x, y, path, last_dx, last_dy)
+    # g_score = coût réel (temps) depuis le départ
+    # f_score = g_score + heuristic
     open_set = [(heuristic(sx, sy), 0, sx, sy, [(sx, sy)], 0, 0)]
-    g_score_map = {(sx, sy): 0}
-    
+    g_score_map = {(sx, sy, 0, 0): 0} # Clé: (x, y, last_dx, last_dy) pour pénaliser les virages
+
     best_path = None
     min_cost = float('inf')
 
@@ -113,7 +165,7 @@ def calculate_best_path(mapped_maze, start_pos, end_pos):
         f, g, x, y, path, last_dx, last_dy = heapq.heappop(open_set)
 
         if x == ex and y == ey:
-            current_cost = get_cost(path)
+            current_cost, _ = get_cost(path)
             if current_cost < min_cost:
                 min_cost = current_cost
                 best_path = path
@@ -122,15 +174,22 @@ def calculate_best_path(mapped_maze, start_pos, end_pos):
         for dy, dx in DIRECTIONS:
             nx, ny = x + dx, y + dy
             
+            # Vérifier que la nouvelle position est dans les limites et n'est pas un mur sur la carte révélée
             if 0 <= ny < rows and 0 <= nx < cols and mapped_maze[ny][nx] != 1:
                 
                 new_g = g + TIME_PER_CELL_MAX_S
                 
+                is_turn = False
+                # Ne pas pénaliser le premier mouvement (quand last_dx et last_dy sont à 0)
                 if len(path) > 1 and (dx != last_dx or dy != last_dy):
                     new_g += TURN_PENALTY_S
+                    is_turn = True
                 
-                if new_g < g_score_map.get((nx, ny), float('inf')):
-                    g_score_map[(nx, ny)] = new_g
+                # La clé doit inclure le sens d'arrivée pour gérer la pénalité de virage
+                key = (nx, ny, dx, dy)
+                
+                if new_g < g_score_map.get(key, float('inf')):
+                    g_score_map[key] = new_g
                     
                     new_path = path + [(nx, ny)]
                     new_f = new_g + heuristic(nx, ny)
@@ -139,7 +198,7 @@ def calculate_best_path(mapped_maze, start_pos, end_pos):
                     
     return best_path, min_cost
 
-# --- Fonctions Utilitaires et Capteurs ---
+# --- Fonctions Utilitaires et Capteurs (restent inchangées) ---
 
 def get_sensor_limits_and_units(config_key):
     if config_key == 'Télémétrie':
@@ -207,6 +266,9 @@ def generate_sensor_data(maze, config_key, path_data, frame):
     return data[0], data[1], data[2]
 
 def get_total_time_path(path):
+    # La fonction existe déjà mais est renommée pour éviter les conflits et clarifier
+    # On va utiliser celle implémentée dans A* qui est plus précise. 
+    # Cette version simplifiée est conservée pour la compatibilité
     if not path or len(path) <= 1: return 0.0, 0
     total_time = (len(path) - 1) * TIME_PER_CELL_MAX_S 
     turn_count = 0
@@ -222,42 +284,84 @@ def get_total_time_path(path):
 
 # --- Plotting ---
 
-def plot_maze_and_path(maze, path_data, current_frame, highlight_path=None):
-    colors = {0: '#222831', 1: '#00ADB5', 2: '#EEEEEE', 3: '#F05454'} 
+def plot_maze_and_path(maze, path_data, current_frame, highlight_path=None, current_stage="Prêt"):
+    
+    # 🎨 Définition des couleurs
+    COLORS = {
+        'Passage': '#222831',     # Noir/Gris très foncé pour les passages (connu)
+        'Mur': '#00ADB5',         # Cyan pour les murs (connu)
+        'Départ': '#EEEEEE',      # Blanc pour le départ
+        'Arrivée': '#F05454',     # Rouge pour l'arrivée
+        'Inconnu': '#171A1D',     # Noir absolu pour les zones inconnues
+        'Visité': '#00ADB5',      # Cyan clair pour la zone visitée
+        'Trajet_Planifie': '#F05454', # Rouge pour le chemin optimal
+        'Robot_Actuel': '#FFD369'     # Jaune pour le robot et le parcours actuel
+    }
+    
     fig, ax = plt.subplots(figsize=(6.5, 6.5), facecolor='#393E46') 
     ax.set_facecolor('#393E46') 
+    rows, cols = maze.shape
 
-    for yy in range(MAZE_SIZE):
-        for xx in range(MAZE_SIZE):
-            color = colors.get(maze[yy][xx], colors[0])
+    # Déterminer la visibilité du labyrinthe (Passage 1 ou Passages 2/3)
+    is_exploring = current_stage.startswith("Passage 1") 
+    
+    # 1. Rendu du Labyrinthe (Murs/Passages)
+    for yy in range(rows):
+        for xx in range(cols):
+            cell_val = maze[yy][xx]
+            
+            # --- Logique de Visibilité ---
+            # Si nous sommes en exploration (Passage 1) et que la case n'a pas été visitée/connue: C'est INCONNU
+            is_visited_or_known = (xx, yy) in path_data.get('visited', set()) or cell_val in [2, 3]
+            
+            if is_exploring and not is_visited_or_known:
+                color = COLORS['Inconnu']
+            elif cell_val == 1:
+                color = COLORS['Mur']
+            elif cell_val == 2:
+                color = COLORS['Départ']
+            elif cell_val == 3:
+                color = COLORS['Arrivée']
+            else: # Passage (0)
+                color = COLORS['Passage']
+            
             ax.add_patch(Rectangle((xx, yy), 1, 1, facecolor=color, edgecolor='#222831', linewidth=0.2))
 
-    if path_data and 'visited' in path_data:
+    # 2. Mise en évidence de la zone explorée (Passage 1)
+    if is_exploring and 'visited' in path_data:
+        # On ne met en surbrillance que les passages visités, pas les murs révélés
         for (x, y) in path_data['visited']:
-            ax.add_patch(Rectangle((x, y), 1, 1, facecolor='#00ADB5', alpha=0.15, edgecolor='none'))
+            if maze[y][x] != 1: 
+                 ax.add_patch(Rectangle((x, y), 1, 1, facecolor=COLORS['Visité'], alpha=0.15, edgecolor='none'))
 
-    path = highlight_path if highlight_path is not None else path_data['path']
-    if path:
+    # 3. Rendu du Chemin (Optimal ou Exploration)
+    path = highlight_path if highlight_path is not None else path_data.get('path', [])
+    
+    # Pour le Passage 3, on affiche le chemin optimal planifié en arrière-plan
+    if not is_exploring and path:
         path_x_full = [p[0] + 0.5 for p in path]
         path_y_full = [p[1] + 0.5 for p in path]
-        ax.plot(path_x_full, path_y_full, color='#F05454', linestyle=':', linewidth=1.5, alpha=0.5, label='Chemin Optimal Planifié')
-        
-        path_segment = path[:current_frame + 1]
-        if len(path_segment) > 1:
-            path_x = [p[0] + 0.5 for p in path_segment]
-            path_y = [p[1] + 0.5 for p in path_segment]
-            ax.plot(path_x, path_y, color='#FFD369', linestyle='-', linewidth=3, solid_capstyle='round', label='Parcours Actuel')
-        
-        if path:
-            idx = min(current_frame, len(path) - 1)
-            rx, ry = path[idx]
-            ax.plot(rx + 0.5, ry + 0.5, 'o', color='#FFD369', markersize=14, markeredgecolor='#EEEEEE', markeredgewidth=1.5, zorder=5, label='Robot')
+        ax.plot(path_x_full, path_y_full, color=COLORS['Trajet_Planifie'], linestyle=':', linewidth=1.5, alpha=0.6, label='Chemin Optimal Planifié')
+
+    # Rendu du parcours actuel du robot
+    path_segment = path[:current_frame + 1]
+    if len(path_segment) > 1:
+        path_x = [p[0] + 0.5 for p in path_segment]
+        path_y = [p[1] + 0.5 for p in path_segment]
+        ax.plot(path_x, path_y, color=COLORS['Robot_Actuel'], linestyle='-', linewidth=3, solid_capstyle='round', label='Parcours Actuel')
+    
+    # Rendu du robot (position actuelle)
+    if path:
+        idx = min(current_frame, len(path) - 1)
+        rx, ry = path[idx]
+        ax.plot(rx + 0.5, ry + 0.5, 'o', color=COLORS['Robot_Actuel'], markersize=14, markeredgecolor=COLORS['Départ'], markeredgewidth=1.5, zorder=5, label='Robot')
 
     ax.set_xlim(0, MAZE_SIZE); ax.set_ylim(MAZE_SIZE, 0); ax.set_aspect('equal'); ax.axis('off')
     fig.tight_layout()
     return fig
 
 def plot_sensor_graphs():
+    # ... (fonction de tracé des capteurs inchangée) ...
     config_key = st.session_state.config
     titles = {
         'Télémétrie': ("Distance Proche (Ultrason)", "Modèle Probabiliste (Pression)", "Scan Laser (Balayage)"),
@@ -306,14 +410,14 @@ def load_current_maze():
         current_maze = st.session_state.mazes.get(maze_key, st.session_state.mazes['Classique (Facile)']).copy()
         
     # Mettre à jour les positions de départ et d'arrivée dans le labyrinthe chargé
+    # On remet à 0 d'abord pour le cas où S/E ont bougé
     current_maze[current_maze == 2] = 0 
     current_maze[current_maze == 3] = 0 
     
-    # S'assurer que les coordonnées S/E sont valides 
+    # S'assurer que S/E sont dans les limites 
     s_x, s_y = st.session_state.start_pos[0], st.session_state.start_pos[1]
     e_x, e_y = st.session_state.end_pos[0], st.session_state.end_pos[1]
 
-    # Sécurité: S'assurer que S/E sont dans les limites
     if 0 <= s_y < MAZE_SIZE and 0 <= s_x < MAZE_SIZE:
         current_maze[s_y, s_x] = 2
     if 0 <= e_y < MAZE_SIZE and 0 <= e_x < MAZE_SIZE:
@@ -336,17 +440,21 @@ if 'algo' not in st.session_state: st.session_state.algo = 'Deep First Search'
 if 'config' not in st.session_state: st.session_state.config = 'Télémétrie'
 if 'start_pos' not in st.session_state: st.session_state.start_pos = (1, 1)
 if 'end_pos' not in st.session_state: st.session_state.end_pos = (MAZE_SIZE-2, MAZE_SIZE-2)
-if 'path_data_map' not in st.session_state: st.session_state.path_data_map = None
-if 'path_data_optimal' not in st.session_state: st.session_state.path_data_optimal = None
+if 'path_data_map' not in st.session_state: st.session_state.path_data_map = None # Résultat Passage 1
+if 'mapped_maze' not in st.session_state: st.session_state.mapped_maze = None # Carte révélée
+if 'path_data_optimal' not in st.session_state: st.session_state.path_data_optimal = None # Résultat Passage 2/3
 if 'frame' not in st.session_state: st.session_state.frame = 0
 if 'sensor_data' not in st.session_state: st.session_state.sensor_data = {'capteur1': [], 'capteur2': [], 'capteur3': []}
 if 'is_running' not in st.session_state: st.session_state.is_running = False
 if 'delay_ms' not in st.session_state: st.session_state.delay_ms = 100
-if 'total_time' not in st.session_state: st.session_state.total_time = 0.0
+if 'total_time' not in st.session_state: st.session_state.total_time = 0.0 # Temps calculé (P2/P3)
+if 'time_p1' not in st.session_state: st.session_state.time_p1 = 0.0 # Chrono Passage 1
+if 'time_p2' not in st.session_state: st.session_state.time_p2 = 0.0 # Chrono Passage 2
 if 'history' not in st.session_state: st.session_state.history = []
 if 'stage' not in st.session_state: st.session_state.stage = "Prêt"
+if 'current_passage' not in st.session_state: st.session_state.current_passage = 0 # 0=Prêt, 1=P1, 2=P2, 3=P3
 if 'selection_mode' not in st.session_state: st.session_state.selection_mode = None 
-# NOUVEAU: Temps de la dernière mise à jour pour contrôler la cadence
+# Temps de la dernière mise à jour pour contrôler la cadence (Passage 3)
 if 'last_update_time' not in st.session_state: st.session_state.last_update_time = time.time() 
 
 
@@ -354,56 +462,74 @@ ALGO_MAP = {
     'Wall following left-hand rule': 'wallFollowLeft',
     'Wall following right-hand rule': 'wallFollowRight',
     'Deep First Search': 'dfs',
-    'Broad First Search': 'bfs',
-    'Tremaux': 'tremaux',
-    'AI-based learning (A*)': 'aiLearning' 
+    'Broad First Search': 'bfs', # Non implémenté ici pour rester simple
+    'Tremaux': 'tremaux', # Non implémenté ici pour rester simple
+    'AI-based learning (A*)': 'aiLearning' # Le Passage 2 utilise A*
 }
 
-def run_simulation():
-    # Désactiver la sélection en cours avant de lancer
-    st.session_state.selection_mode = None
+def run_simulation(start_passage=1):
+    """Contrôleur de la séquence des 3 passages."""
     
+    st.session_state.selection_mode = None
     maze = load_current_maze()
     sx, sy = st.session_state.start_pos
+    ex, ey = st.session_state.end_pos
     
-    # Passage 1: Cartographie / Exploration
-    st.session_state.stage = "Cartographie (Passage 1/3)"
-    algo_key = ALGO_MAP.get(st.session_state.algo, 'dfs')
-    default_heading = 1
-    
-    if algo_key == 'wallFollowLeft':
-        st.session_state.path_data_map = wall_follow(maze, sx, sy, default_heading, right_hand=False)
-    elif algo_key == 'wallFollowRight':
-        st.session_state.path_data_map = wall_follow(maze, sx, sy, default_heading, right_hand=True)
-    elif algo_key in ['dfs', 'tremaux', 'bfs', 'aiLearning']: 
+    # --- Passage 1: Cartographie / Exploration ---
+    if start_passage <= 1:
+        st.session_state.current_passage = 1
+        st.session_state.stage = "Passage 1/3: Exploration et Cartographie"
+        st.session_state.frame = 0 # Initialiser l'animation du P1
+        
+        # On utilise toujours DFS pour garantir l'exploration (sinon on n'aurait pas la carte complète)
         st.session_state.path_data_map = dfs_search(maze, sx, sy)
-    
-    mapped_maze = maze.copy()
-    
-    # Passage 2: Planification du Chemin Optimal
-    st.session_state.stage = "Planification (Passage 2/3)"
-    best_path, min_cost = calculate_best_path(mapped_maze, st.session_state.start_pos, st.session_state.end_pos)
-    
-    st.session_state.path_data_optimal = {'path': best_path, 'visited': st.session_state.path_data_map['visited']}
-    st.session_state.total_time = min_cost
-    
-    # Passage 3: Exécution Rapide (Initialisation)
-    st.session_state.stage = "Exécution Rapide (Passage 3/3)"
-    st.session_state.frame = 0
-    st.session_state.sensor_data = {'capteur1': [], 'capteur2': [], 'capteur3': []}
-    st.session_state.is_running = True
-    # Initialiser le temps de la dernière mise à jour au moment du lancement
-    st.session_state.last_update_time = time.time()
-    st.rerun() 
+        st.session_state.time_p1 = st.session_state.path_data_map['time']
+        st.session_state.mapped_maze = st.session_state.path_data_map['mapped_maze']
+        
+        # Passer directement au Passage 2
+        run_simulation(start_passage=2)
+        return
+
+    # --- Passage 2: Planification du Chemin Optimal (A*) ---
+    if start_passage <= 2:
+        st.session_state.current_passage = 2
+        st.session_state.stage = "Passage 2/3: Calcul du Chemin Optimal (A*)"
+        st.session_state.sensor_data = {'capteur1': [], 'capteur2': [], 'capteur3': []}
+        
+        calc_start_time = time.time()
+        best_path, min_cost = calculate_best_path(st.session_state.mapped_maze, st.session_state.start_pos, st.session_state.end_pos)
+        calc_end_time = time.time()
+        
+        st.session_state.time_p2 = calc_end_time - calc_start_time # Chrono Calcul
+        st.session_state.path_data_optimal = {'path': best_path, 'visited': st.session_state.path_data_map['visited']}
+        st.session_state.total_time = min_cost # Le temps simulé pour le P3 est le coût optimal calculé
+        
+        # Passer directement au Passage 3
+        run_simulation(start_passage=3)
+        return
+
+    # --- Passage 3: Exécution Rapide / Simulation ---
+    if start_passage == 3:
+        st.session_state.current_passage = 3
+        st.session_state.stage = "Passage 3/3: Exécution du Trajet Optimal"
+        st.session_state.frame = 0
+        st.session_state.is_running = True
+        st.session_state.last_update_time = time.time()
+        st.rerun() 
+        return
 
 def reset():
     st.session_state.frame = 0
     st.session_state.is_running = False
     st.session_state.path_data_map = None
     st.session_state.path_data_optimal = None
+    st.session_state.mapped_maze = None
     st.session_state.sensor_data = {'capteur1': [], 'capteur2': [], 'capteur3': []}
     st.session_state.total_time = 0.0
+    st.session_state.time_p1 = 0.0
+    st.session_state.time_p2 = 0.0
     st.session_state.stage = "Prêt"
+    st.session_state.current_passage = 0
     st.session_state.selection_mode = None 
     st.session_state.last_update_time = time.time()
 
@@ -419,7 +545,8 @@ def save_simulation():
             'config': st.session_state.config,
             'start_pos': st.session_state.start_pos,
             'end_pos': st.session_state.end_pos,
-            'total_time': st.session_state.total_time,
+            'total_time': st.session_state.total_time, # Chrono P3
+            'time_p1': st.session_state.time_p1, # Chrono P1
             'path': st.session_state.path_data_optimal['path'],
             'visited': list(st.session_state.path_data_optimal['visited']),
             'maze_array': maze_array_to_save
@@ -457,14 +584,12 @@ with st.sidebar:
         is_selecting_s = st.session_state.selection_mode == 'start'
         if st.button("🖱️ Choisir Départ", disabled=st.session_state.is_running, type="primary" if is_selecting_s else "secondary", use_container_width=True):
             st.session_state.selection_mode = 'start' if not is_selecting_s else None
-            # Correction: Forcer le rerun pour afficher la grille interactive
             if st.session_state.selection_mode: st.rerun() 
     
     with col_e:
         is_selecting_e = st.session_state.selection_mode == 'end'
         if st.button("🖱️ Choisir Arrivée", disabled=st.session_state.is_running, type="primary" if is_selecting_e else "secondary", use_container_width=True):
             st.session_state.selection_mode = 'end' if not is_selecting_e else None
-            # Correction: Forcer le rerun pour afficher la grille interactive
             if st.session_state.selection_mode: st.rerun() 
             
     if st.session_state.selection_mode:
@@ -484,17 +609,32 @@ with st.sidebar:
     if st.button("🔄 Réinitialiser"):
         reset()
 
-    if st.session_state.total_time > 0 and st.session_state.path_data_optimal:
+    # --- Affichage des Chronomètres ---
+    st.markdown("### ⏱️ Chronomètres")
+    
+    if st.session_state.time_p1 > 0:
+        st.text(f"P1 (Exploration): {st.session_state.time_p1:.3f} s")
+    else:
+        st.text("P1 (Exploration): 0.000 s")
+        
+    if st.session_state.time_p2 > 0:
+        st.text(f"P2 (Calcul A*): {st.session_state.time_p2 * 1000:.3f} ms")
+    else:
+        st.text("P2 (Calcul A*): 0.000 ms")
+        
+    if st.session_state.total_time > 0 and st.session_state.current_passage >= 2:
         path_len = len(st.session_state.path_data_optimal['path'])
         visited_len = len(st.session_state.path_data_optimal['visited'])
         _, turn_count = get_total_time_path(st.session_state.path_data_optimal['path'])
         
+        st.text(f"P3 (Simulé Optimal): {st.session_state.total_time:.3f} s")
+        st.markdown("---")
         st.markdown("### 📊 Statistiques Optimales")
-        st.text(f"Robot Speed: {ROBOT_SPEED_MPS:.3f} m/s")
         st.text(f"Distance: {(path_len-1) * CELL_SIZE_M:.2f} m")
         st.text(f"Virages: {turn_count}")
-        st.text(f"Chronomètre: {st.session_state.total_time:.3f} s")
-        st.text(f"Exploré (Passage 1): {visited_len} / {MAZE_SIZE*MAZE_SIZE}")
+        st.text(f"Exploré (P1): {visited_len} / {MAZE_SIZE*MAZE_SIZE} cases")
+        st.text(f"Vitesse Robot: {ROBOT_SPEED_MPS:.3f} m/s")
+
 
 # --- UI Principale ---
 
@@ -507,6 +647,7 @@ is_interactive_grid_active = st.session_state.maze_name == 'Construction autonom
 
 if is_interactive_grid_active:
     
+    # ... (Code de la grille interactive inchangé) ...
     if st.session_state.maze_name == 'Construction autonome':
         st.title("🔨 Construction de Labyrinthe Autonome")
         st.markdown("Cliquez sur les cases pour basculer entre **Passage (0)** et **Mur (1)**. Utilisez les boutons dans la barre latérale pour sélectionner **Départ/Arrivée**.")
@@ -578,7 +719,8 @@ with st.expander("📂 Historique des Simulations", expanded=False):
     else:
         for i, sim in enumerate(reversed(st.session_state.history)):
             st.markdown(f"**{i+1}. {sim['timestamp']}** - **{sim['maze_name']}** / **{sim['algo']}**")
-            st.text(f"Temps Final: {sim['total_time']:.3f} s")
+            st.text(f"Temps P1 (Exploration): {sim['time_p1']:.3f} s")
+            st.text(f"Temps P3 (Simulé Optimal): {sim['total_time']:.3f} s")
             
             if st.button(f"Visualiser Passage {len(st.session_state.history) - i}", key=f"hist_viz_{i}"):
                 st.session_state.temp_path_data = {'path': sim['path'], 'visited': set(sim['visited'])}
@@ -588,7 +730,8 @@ with st.expander("📂 Historique des Simulations", expanded=False):
             
             if 'temp_path_data' in st.session_state and st.session_state.temp_name == f"{sim['maze_name']} ({sim['timestamp']})":
                 st.subheader(f"Visualisation de l'Historique: {st.session_state.temp_name}")
-                fig_hist = plot_maze_and_path(st.session_state.temp_maze, st.session_state.temp_path_data, len(st.session_state.temp_path_data['path']) - 1, highlight_path=sim['path'])
+                # Affichage de l'historique toujours en mode "connu" (simulé P3)
+                fig_hist = plot_maze_and_path(st.session_state.temp_maze, st.session_state.temp_path_data, len(st.session_state.temp_path_data['path']) - 1, highlight_path=sim['path'], current_stage="Passage 3/3: Exécution du Trajet Optimal")
                 st.pyplot(fig_hist)
                 st.info(f"Temps Chronométré (Simulé): {st.session_state.temp_time:.3f} s")
             
@@ -605,20 +748,33 @@ if not is_interactive_grid_active:
     with maze_col:
         st.subheader(f"Labyrinthe & Trajectoire ({st.session_state.stage})")
         
-        path_to_display = st.session_state.path_data_optimal['path'] if st.session_state.path_data_optimal else st.session_state.path_data_map['path'] if st.session_state.path_data_map else None
-
-        if path_to_display is None:
+        path_data = {}
+        path_to_display = []
+        
+        if st.session_state.current_passage == 1 and st.session_state.path_data_map:
+            # P1: Afficher le chemin d'exploration DFS (chemin le plus long possible)
+            path_data = st.session_state.path_data_map
+            path_to_display = path_data['path']
+            
+        elif st.session_state.current_passage >= 2 and st.session_state.path_data_optimal:
+            # P2/P3: Afficher le chemin optimal (chemin le plus court/rapide)
+            path_data = st.session_state.path_data_optimal
+            path_to_display = path_data['path']
+        
+        if not path_to_display:
+            # Par défaut, juste la position de départ
             path_to_display = [(st.session_state.start_pos)]
             path_data = {'path': path_to_display, 'visited': {st.session_state.start_pos}}
-        else:
-            path_data = st.session_state.path_data_optimal if st.session_state.path_data_optimal else st.session_state.path_data_map
+        
+        # Le labyrinthe affiché dépend du passage
+        maze_to_plot = st.session_state.mapped_maze if st.session_state.current_passage >= 2 else current_maze
         
         # Afficher le graphique Matplotlib classique
-        fig_maze = plot_maze_and_path(current_maze, path_data, st.session_state.frame, highlight_path=path_to_display)
+        fig_maze = plot_maze_and_path(maze_to_plot, path_data, st.session_state.frame, highlight_path=path_to_display, current_stage=st.session_state.stage)
         st.pyplot(fig_maze)
 
-        if st.session_state.total_time > 0 and not st.session_state.is_running and st.session_state.path_data_optimal:
-            st.success(f"🏁 Course Terminée ! Temps Optimal Calculé: **{st.session_state.total_time:.3f} s**")
+        if st.session_state.current_passage == 3 and not st.session_state.is_running and st.session_state.path_data_optimal:
+            st.success(f"🏁 **Passage 3 Terminé !** Temps Optimal Simulé: **{st.session_state.total_time:.3f} s**")
             
     with graphs_col:
         st.subheader("Analyse Odométrique des Capteurs")
@@ -628,39 +784,42 @@ if not is_interactive_grid_active:
 
 # --- Auto-play (Passage 3: Exécution Rapide) ---
 if st.session_state.is_running:
-    path_len = len(st.session_state.path_data_optimal['path'])
-    
-    # Récupérer le temps actuel et le délai désiré par l'utilisateur (en secondes)
-    current_time = time.time()
-    delay_s = st.session_state.delay_ms / 1000.0
-    
-    # Condition pour l'avancement : le temps écoulé doit être supérieur au délai demandé
-    if current_time - st.session_state.last_update_time >= delay_s:
+    # On exécute uniquement le Passage 3
+    if st.session_state.current_passage == 3 and st.session_state.path_data_optimal:
         
-        if st.session_state.frame < path_len - 1:
+        path_len = len(st.session_state.path_data_optimal['path'])
+        
+        current_time = time.time()
+        delay_s = st.session_state.delay_ms / 1000.0
+        
+        # Avancer si le temps écoulé est supérieur au délai demandé
+        if current_time - st.session_state.last_update_time >= delay_s:
             
-            st.session_state.frame += 1
-            st.session_state.last_update_time = current_time # Mettre à jour le temps de la dernière exécution
+            if st.session_state.frame < path_len - 1:
+                
+                st.session_state.frame += 1
+                st.session_state.last_update_time = current_time # Mettre à jour le temps de la dernière exécution
 
-            t_current = st.session_state.frame * TIME_PER_CELL_MAX_S # Temps estimé
-            
-            d1, d2, d3 = generate_sensor_data(current_maze, st.session_state.config, st.session_state.path_data_optimal, st.session_state.frame)
-            st.session_state.sensor_data['capteur1'].append((t_current, d1))
-            st.session_state.sensor_data['capteur2'].append((t_current, d2))
-            st.session_state.sensor_data['capteur3'].append((t_current, d3))
-            
-            for k in st.session_state.sensor_data:
-                if len(st.session_state.sensor_data[k]) > 200:
-                    st.session_state.sensor_data[k] = st.session_state.sensor_data[k][-200:]
-                    
-            # Le rerun force Streamlit à rafraîchir l'interface immédiatement.
-            st.rerun() 
-            
+                # Le temps écoulé dans le graphique des capteurs doit être le temps simulé optimal
+                # On utilise la fonction de coût pour obtenir le temps réel simulé à la frame actuelle
+                t_current, _ = get_total_time_path(st.session_state.path_data_optimal['path'][:st.session_state.frame + 1])
+                
+                d1, d2, d3 = generate_sensor_data(current_maze, st.session_state.config, st.session_state.path_data_optimal, st.session_state.frame)
+                st.session_state.sensor_data['capteur1'].append((t_current, d1))
+                st.session_state.sensor_data['capteur2'].append((t_current, d2))
+                st.session_state.sensor_data['capteur3'].append((t_current, d3))
+                
+                for k in st.session_state.sensor_data:
+                    if len(st.session_state.sensor_data[k]) > 200:
+                        st.session_state.sensor_data[k] = st.session_state.sensor_data[k][-200:]
+                        
+                st.rerun() 
+                
+            else:
+                st.session_state.is_running = False
+                st.session_state.stage = "Terminé"
+                st.rerun()
+        
+        # Rerun constant pour l'animation Streamlit
         else:
-            st.session_state.is_running = False
-            st.session_state.stage = "Terminé"
             st.rerun()
-    
-    # Si le temps n'est pas écoulé, on lance un rerun pour vérifier à nouveau rapidement (animation)
-    else:
-        st.rerun()
