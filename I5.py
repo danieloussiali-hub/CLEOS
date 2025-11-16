@@ -1,3 +1,6 @@
+
+
+
 import time
 import random
 import heapq
@@ -261,6 +264,9 @@ def plot_maze_and_path(maze, path_data, current_frame, highlight_path=None):
     fig.tight_layout()
     return fig
 
+# -------------------------------------------------------------
+# DÉBUT DE LA MODIFICATION
+# -------------------------------------------------------------
 def plot_sensor_graphs():
     config_key = st.session_state.config
     titles = {
@@ -272,6 +278,11 @@ def plot_sensor_graphs():
     }
     limits_and_units = get_sensor_limits_and_units(config_key)
     figs = []
+    
+    # Correction : Définir les couleurs et le style de ligne séparément
+    COLORS = ['#F05454', '#00ADB5', '#FFD369']
+    LINESTYLE = '-'
+
     for i in range(3):
         fig, ax = plt.subplots(figsize=(4,1.8), facecolor='#393E46')
         ax.set_facecolor('#222831')
@@ -280,7 +291,11 @@ def plot_sensor_graphs():
         data = st.session_state.sensor_data.get(key, [])
         if data:
             times = [d[0] for d in data]; values = [d[1] for d in data]
-            ax.plot(times, values, ['#F05454','#00ADB5','#FFD369'][i]+'-', linewidth=1)
+            
+            # --- LIGNE CLÉ CORRIGÉE (Ancienne: ax.plot(times, values, ['#F05454','#00ADB5','#FFD369'][i]+'-', linewidth=1)) ---
+            ax.plot(times, values, color=COLORS[i], linestyle=LINESTYLE, linewidth=1) 
+            # --- FIN CORRECTION ---
+            
         min_val, max_val, unit = limits_and_units[i]
         ax.set_ylim(min_val, max_val); ax.set_ylabel(unit, fontsize=8, color='#EEEEEE')
         ax.set_xlabel('Temps (s)', fontsize=8, color='#EEEEEE')
@@ -289,6 +304,9 @@ def plot_sensor_graphs():
         fig.tight_layout()
         figs.append(fig)
     return figs
+# -------------------------------------------------------------
+# FIN DE LA MODIFICATION
+# -------------------------------------------------------------
 
 # --- Streamlit App UI & State Management ---
 
@@ -463,7 +481,7 @@ with st.sidebar:
 
 # --- UI Principale ---
 
-# 🌟 CORRECTION DE L'ERREUR ICI: Définir current_maze inconditionnellement
+# CORRECTION DU NAMERROR PRÉCÉDENT: Définir current_maze inconditionnellement
 current_maze = load_current_maze() 
 
 # Onglet pour la construction autonome
@@ -550,7 +568,7 @@ if st.session_state.maze_name != 'Construction autonome':
             
     with graphs_col:
         st.subheader("Analyse Odométrique des Capteurs")
-        figs = plot_sensor_graphs() # L'erreur est corrigée ici
+        figs = plot_sensor_graphs()
         for f in figs:
             st.pyplot(f)
 
@@ -580,3 +598,4 @@ if st.session_state.is_running:
         st.session_state.is_running = False
         st.session_state.stage = "Terminé"
         st.rerun()
+```
