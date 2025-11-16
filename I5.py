@@ -6,7 +6,8 @@ import math
 import pandas as pd
 
 # --- Constantes de Simulation ---
-GRID_SIZE = 10
+# La valeur par défaut est 10, mais elle peut être modifiée par le slider dans l'interface
+GRID_SIZE_DEFAULT = 10 
 CELL_SIZE_M = 1.0  # Taille d'une cellule en mètres
 TIME_PER_STEP_S = 1.0  # Temps pour traverser une cellule
 TURN_PENALTY_S = 0.5  # Temps additionnel pour un virage
@@ -18,12 +19,14 @@ def create_random_maze(size, density=0.3):
     maze = np.zeros((size, size), dtype=int)
     for r in range(size):
         for c in range(size):
-            if (r > 0 or c > 0) and (r < size - 1 or c < size - 1): # Évite les coins et bords extrêmes
+            # Évite les coins, bords extrêmes et assure le chemin initial/final
+            if (r > 0 or c > 0) and (r < size - 1 or c < size - 1): 
                 if random.random() < density:
                     maze[r, c] = 1
-    # Assurez-vous que le point de départ (1,1) et d'arrivée (8,8) sont libres
-    maze[1, 1] = 0
-    maze[size - 2, size - 2] = 0
+    # Assurez-vous que le point de départ et d'arrivée sont libres
+    if size >= 3:
+        maze[1, 1] = 0
+        maze[size - 2, size - 2] = 0
     return maze
 
 def find_shortest_path(maze, start, end):
@@ -31,6 +34,10 @@ def find_shortest_path(maze, start, end):
     rows, cols = maze.shape
     queue = [([start], start)] # (path, current_position)
     visited = {start}
+    
+    # Vérifie si la grille est trop petite ou si les points sont invalides
+    if start[0] >= rows or start[1] >= cols or end[0] >= rows or end[1] >= cols:
+        return None
     
     while queue:
         path, (r, c) = queue.pop(0)
@@ -61,13 +68,10 @@ def calculate_path_metrics(path):
         r1, c1 = path[i]
         r2, c2 = path[i+1]
         
-        # Distance (une étape = 1 cellule = CELL_SIZE_M)
         distance_m += CELL_SIZE_M
-        
-        # Temps: STEP_TIME + pénalité de virage
         time_s += TIME_PER_STEP_S
         
-        # Simple détection de virage: si le mouvement change d'axe
+        # Détection simple de virage
         if i > 0:
             (r0, c0) = path[i-1]
             prev_dir = (r1 - r0, c1 - c0)
@@ -94,11 +98,12 @@ def get_distance_to_nearest_wall(maze, r, c):
         
         # Si on est sorti par un mur ou la bordure
         if 0 <= nr < rows and 0 <= nc < cols and maze[nr, nc] == 1:
-            min_dist = min(min_dist, dist + 0.5) # Ajout de 0.5 pour le mur adjacent
+            min_dist = min(min_dist, dist * CELL_SIZE_M * 100 + (CELL_SIZE_M * 100 / 2))
         elif nr < 0 or nr >= rows or nc < 0 or nc >= cols:
-            min_dist = min(min_dist, dist + 0.5) # Bordure = Mur
+            min_dist = min(min_dist, dist * CELL_SIZE_M * 100 + (CELL_SIZE_M * 100 / 2))
             
-    return min_dist if min_dist != float('inf') else 0
+    # La valeur retournée est en cm
+    return min_dist / 100.0 # Retourne en mètres (pour être converti en cm plus tard)
 
 def get_sensor_limits_and_units(config_key):
     """Définit les limites et les unités pour chaque capteur."""
@@ -115,9 +120,11 @@ def get_sensor_limits_and_units(config_key):
             (0, 360, 'deg')      # Orientation (Magnétomètre/Angle Intégré)
         ]
     elif config_key == 'Coordonnées GPS (triangulation)':
+        # La taille max est dynamique en fonction de la taille de la grille
+        max_coord = st.session_state.maze.shape[0] * CELL_SIZE_M * 100
         return [
-            (0, GRID_SIZE * CELL_SIZE_M * 100, 'cm (X)'), 
-            (0, GRID_SIZE * CELL_SIZE_M * 100, 'cm (Y)'),
+            (0, max_coord, 'cm (X)'), 
+            (0, max_coord, 'cm (Y)'),
             (0, 10, 'DOP') # Dilution of Precision
         ]
     # Autres configurations par défaut
@@ -128,7 +135,7 @@ def get_sensor_limits_and_units(config_key):
             (0, 100, 'unités')
         ]
 
-# --- MODÈLE DE BRUIT AFFINÉ ET CORRIGÉ ---
+# --- MODÈLE DE BRUIT AFFINÉ ET CORRIGÉ (avec utilisation de st.session_state) ---
 
 def generate_sensor_data(maze, config_key, path_data, frame):
     """Génère des données de capteurs plus réalistes pour l'analyse graphique."""
@@ -137,12 +144,10 @@ def generate_sensor_data(maze, config_key, path_data, frame):
     
     path = path_data['path']
     if not path:
-        return 0, 0, 0 # Retourne zéro si pas de chemin
+        return 0, 0, 0 
         
-    # S'assurer que l'index ne dépasse pas la taille du chemin
     current_frame = min(frame, len(path)-1)
     
-    # Déterminer si le robot est en mouvement ou à un tournant
     is_moving = current_frame > 0 
     
     rx, ry = path[current_frame]
@@ -151,7 +156,7 @@ def generate_sensor_data(maze, config_key, path_data, frame):
         px, py = path[current_frame-1]
         dx, dy = rx - px, ry - py
         # Un virage se produit si la direction précédente était différente
-        is_turning = current_frame > 1 and (path[current_frame-2] != path[current_frame-1]) and (dx != 0 and dy != 0)
+        is_turning = current_frame > 1 and (path[current_frame-2] != path[current_frame-1]) and (dx != 0 or dy != 0)
     else:
         dx, dy = 0, 0
         is_turning = False
@@ -159,12 +164,11 @@ def generate_sensor_data(maze, config_key, path_data, frame):
     # --- Télémétrie (Ultrason/Laser) ---
     if config_key == 'Télémétrie':
         # Capteur 1: Distance Proche (Ultrason/Lidar)
-        min_dist_cells = get_distance_to_nearest_wall(maze, rx, ry)
-        # Valeur de base en cm
-        base_val_1 = np.clip(min_dist_cells * CELL_SIZE_M * 100 - (CELL_SIZE_M * 100 / 2), 0, limits[0][1])
+        min_dist_m = get_distance_to_nearest_wall(maze, rx, ry)
+        base_val_1 = np.clip(min_dist_m * 100, 0, limits[0][1]) # Valeur en cm
         
         # Bruit dépendant de la distance (bruit plus grand si plus loin)
-        noise_factor = 0.05 * base_val_1 / limits[0][1] + 0.02 # Min 2% de l'échelle max
+        noise_factor = 0.05 * base_val_1 / limits[0][1] + 0.02 
         noise = random.uniform(-noise_factor, noise_factor) * limits[0][1]
         
         val_1 = np.clip(base_val_1 + noise, limits[0][0], limits[0][1])
@@ -180,36 +184,32 @@ def generate_sensor_data(maze, config_key, path_data, frame):
     # --- Centrale Inertielle (IMU) ---
     elif config_key == 'Centrale inertielle':
         # Capteur 1: Force X (Accéléromètre)
-        # Forte accélération/décélération lors des virages
         base_val_1 = 0.0
         if is_turning:
-            # Pic d'accélération
             base_val_1 = random.uniform(8, 15) * random.choice([-1, 1])
         elif is_moving:
-            # Bruit de vibration en ligne droite
             base_val_1 = random.uniform(-0.5, 0.5) 
         
-        accel_noise = random.uniform(-1, 1) * 0.5 # Bruit d'accéléromètre
+        accel_noise = random.uniform(-1, 1) * 0.5 
         data.append(np.clip(base_val_1 + accel_noise, limits[0][0], limits[0][1]))
 
         # Capteur 2: Vitesse Angulaire Z (Gyroscope)
         base_val_2 = 0.0
         if is_turning:
-            # Pic de rotation lors d'un virage (ex: 90 deg/0.25s -> 360 deg/s)
+            # Pic de rotation
             rotation_rate = 360 / (TURN_PENALTY_S + TIME_PER_STEP_S) 
             base_val_2 = random.uniform(rotation_rate * 0.8, rotation_rate * 1.2) * random.choice([-1, 1])
         
-        gyro_noise = random.uniform(-5, 5) # Bruit de gyroscope
+        gyro_noise = random.uniform(-5, 5) 
         data.append(np.clip(base_val_2 + gyro_noise, limits[1][0], limits[1][1]))
         
         # Capteur 3: Orientation (Magnétomètre/Angle Intégré)
-        # Accumulation de l'erreur (drift)
+        # Gestion de la dérive (drift)
         if is_moving:
             # L'intégration est basée sur le taux de rotation bruité
             rotation_step = data[1] * (TIME_PER_STEP_S + TURN_PENALTY_S) 
-            st.session_state.heading_drift += rotation_step * 0.01 # Intégration simplifiée de l'erreur (biais)
+            st.session_state.heading_drift += rotation_step * 0.01 
         
-        # Une valeur d'orientation simple basée sur le temps + drift
         orientation_val = (frame * 10) % 360 + st.session_state.heading_drift
         data.append(np.clip(orientation_val, limits[2][0], limits[2][1]))
 
@@ -220,9 +220,8 @@ def generate_sensor_data(maze, config_key, path_data, frame):
         real_x = rx * CELL_SIZE_M * 100
         real_y = ry * CELL_SIZE_M * 100
         
-        # Bruit de localisation plus important en mouvement
         # Erreur standard en centimètres
-        gps_error_cm = 10 + (30 * (is_moving)) # 10cm de base + 30cm en mouvement
+        gps_error_cm = 10 + (30 * (is_moving)) 
         
         # Capteur 1 (X)
         noise_x = random.gauss(0, gps_error_cm)
@@ -232,9 +231,9 @@ def generate_sensor_data(maze, config_key, path_data, frame):
         noise_y = random.gauss(0, gps_error_cm)
         data.append(np.clip(real_y + noise_y, limits[1][0], limits[1][1]))
         
-        # Capteur 3 (DOP: Dilution of Precision) - dépend du mouvement/environnement
+        # Capteur 3 (DOP: Dilution of Precision)
         base_dop = 3.0 + random.uniform(0, 3) 
-        dop_val = base_dop + (3 * is_moving) # Erreur augmente en mouvement
+        dop_val = base_dop + (3 * is_moving)
         data.append(np.clip(dop_val, limits[2][0], limits[2][1]))
         
     # --- Autres Capteurs (Générique) ---
@@ -247,42 +246,69 @@ def generate_sensor_data(maze, config_key, path_data, frame):
             
     return data[0], data[1], data[2]
 
-# --- Initialisation de l'état de la session (CORRECTION DE L'ERREUR KEYERROR) ---
+# --- Initialisation de l'état de la session (CORRECTION KEYERROR) ---
 
-# --- Toutes les clés utilisées dans st.session_state doivent être initialisées ici ---
+st.set_page_config(layout="wide", page_title="Simulation Odométrique")
+st.title("🗺️ Simulateur d'Odométrie et d'Analyse de Capteurs")
+
+# Initialisation de toutes les clés utilisées dans st.session_state
 if 'maze' not in st.session_state:
-    st.session_state.maze = create_random_maze(GRID_SIZE)
+    st.session_state.maze = create_random_maze(GRID_SIZE_DEFAULT)
 
 if 'path_data' not in st.session_state:
-    # Chemin par défaut (peut être mis à jour plus tard)
     st.session_state.path_data = {'path': [], 'time': 0, 'distance': 0}
 
 if 'sensor_data' not in st.session_state:
     st.session_state.sensor_data = pd.DataFrame()
 
 if 'heading_drift' not in st.session_state:
-    st.session_state.heading_drift = 0.0 # Clé ajoutée pour la dérive de l'IMU/Gyro
+    st.session_state.heading_drift = 0.0 # Clé essentielle pour le modèle de bruit IMU
 
 # --- Logique Principale de l'Application Streamlit ---
 
-st.set_page_config(layout="wide", page_title="Simulation Odométrique")
-
-st.title("🗺️ Simulation d'Odométrie et d'Analyse de Capteurs")
-
 col1, col2 = st.columns([1, 2])
 
+# --- BLOC DE CONFIGURATION AMÉLIORÉ (col1) ---
 with col1:
-    st.header("⚙️ Configuration")
+    st.header("⚙️ Configuration & Contrôle")
+    
+    st.markdown("---")
+    st.subheader("Environnement (Labyrinthe)")
+
+    # Sliders pour la personnalisation de la grille
+    current_grid_size = st.session_state.maze.shape[0] # Récupère la taille actuelle
+    new_grid_size = st.slider("Taille de la Grille (N x N)", min_value=5, max_value=20, value=current_grid_size, step=1)
+    new_density = st.slider("Densité des Murs (Complexité)", min_value=0.1, max_value=0.5, value=0.3, step=0.05)
     
     # Bouton pour générer un nouveau labyrinthe
-    if st.button("🔄 Générer un nouveau Labyrinthe"):
-        st.session_state.maze = create_random_maze(GRID_SIZE)
+    if st.button("🔄 Générer un nouveau Labyrinthe (Aléatoire)", use_container_width=True):
+        st.session_state.maze = create_random_maze(new_grid_size, density=new_density)
         st.session_state.path_data = {'path': [], 'time': 0, 'distance': 0}
-        st.session_state.sensor_data = pd.DataFrame() # Réinitialiser les données des capteurs
+        st.session_state.sensor_data = pd.DataFrame()
+        st.session_state.heading_drift = 0.0
+        st.success(f"Nouveau labyrinthe {new_grid_size}x{new_grid_size} généré.")
+        st.experimental_rerun() # Pour mettre à jour immédiatement les graphiques
 
-    # Paramètres du robot
+    st.markdown("---")
+    st.subheader("Modèle de Robot & Capteurs")
+    
+    # Sélection du scénario de capteur
+    config_key = st.selectbox(
+        "Sélectionnez le type de capteur à analyser :",
+        ['Télémétrie', 'Centrale inertielle', 'Coordonnées GPS (triangulation)', 'Caméra (générique)', 'Radar (générique)'],
+        key='sensor_config'
+    )
+    
+    # Points de départ/arrivée (dynamiques)
+    grid_size_used = st.session_state.maze.shape[0]
     start = (1, 1)
-    end = (GRID_SIZE - 2, GRID_SIZE - 2)
+    end = (grid_size_used - 2, grid_size_used - 2)
+
+    st.markdown(f"> **Départ :** Cellule {start} | **Arrivée :** Cellule {end}")
+    
+    # --- Contrôles de Simulation ---
+    st.markdown("---")
+    st.subheader("Contrôle de la Simulation")
 
     # Calcul et affichage du chemin
     path = find_shortest_path(st.session_state.maze, start, end)
@@ -293,56 +319,45 @@ with col1:
 
         st.success(f"Chemin trouvé en {len(path)} étapes.")
         st.info(f"Temps total estimé: **{time_s} s** | Distance: **{distance_m} m**")
-    else:
-        st.session_state.path_data = {'path': [], 'time': 0, 'distance': 0}
-        st.error("Aucun chemin trouvé pour ce labyrinthe.")
 
-    st.subheader("Modèle de Capteur")
-    config_key = st.selectbox(
-        "Sélectionnez le type de capteur à analyser :",
-        ['Télémétrie', 'Centrale inertielle', 'Coordonnées GPS (triangulation)', 'Caméra (générique)', 'Radar (générique)']
-    )
-
-    # Bouton de simulation
-    if st.button("▶️ Lancer la Simulation"):
-        if path:
+        # Bouton de simulation
+        if st.button("▶️ Lancer la Simulation Odométrique", use_container_width=True, type="primary"):
             st.session_state.sensor_data = pd.DataFrame()
-            st.session_state.heading_drift = 0.0 # Réinitialiser la dérive à chaque simulation
+            st.session_state.heading_drift = 0.0 # Réinitialiser la dérive
             
-            # Création d'une barre de progression
             progress_bar = st.progress(0)
-            
             all_sensor_data = []
             
             for i, (r, c) in enumerate(path):
-                # Génération des données bruitées
                 s1, s2, s3 = generate_sensor_data(st.session_state.maze, config_key, st.session_state.path_data, i)
                 
                 all_sensor_data.append({
                     'Étape': i,
-                    'Temps (s)': i * TIME_PER_STEP_S, # Temps simple pour le graphique
+                    'Temps (s)': i * TIME_PER_STEP_S, 
                     'Capteur 1': s1,
                     'Capteur 2': s2,
                     'Capteur 3': s3
                 })
                 
-                # Mise à jour de la barre
                 progress_bar.progress((i + 1) / len(path))
-                
-                # Petit délai pour l'effet de progression
                 time.sleep(0.01)
 
             st.session_state.sensor_data = pd.DataFrame(all_sensor_data)
             progress_bar.empty()
-            st.success("Simulation terminée. Analyse des données des capteurs prête.")
-        else:
-            st.warning("Veuillez générer un labyrinthe avec un chemin valide avant de simuler.")
+            st.toast("Analyse des capteurs terminée !", icon="✅")
+            st.experimental_rerun()
+            
+    else:
+        st.session_state.path_data = {'path': [], 'time': 0, 'distance': 0}
+        st.error("Aucun chemin trouvé pour cette configuration. Générez un autre labyrinthe.")
 
+
+# --- AFFICHAGE DU LABYRINTHE (col2) ---
 with col2:
     st.header("🖼️ Labyrinthe et Trajectoire")
     
-    # Affichage du labyrinthe
-    fig_maze = np.zeros((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8) # Image RGB
+    grid_size_used = st.session_state.maze.shape[0]
+    fig_maze = np.zeros((grid_size_used, grid_size_used, 3), dtype=np.uint8) 
     
     # Couleurs
     WALL_COLOR = [50, 50, 50]       # Gris foncé
@@ -350,8 +365,8 @@ with col2:
     START_COLOR = [0, 200, 0]       # Vert
     END_COLOR = [200, 0, 0]         # Rouge
     
-    for r in range(GRID_SIZE):
-        for c in range(GRID_SIZE):
+    for r in range(grid_size_used):
+        for c in range(grid_size_used):
             if st.session_state.maze[r, c] == 1:
                 fig_maze[r, c] = WALL_COLOR
             else:
@@ -361,19 +376,22 @@ with col2:
     if path:
         for r, c in path:
             fig_maze[r, c] = PATH_COLOR
-        fig_maze[start[0], start[1]] = START_COLOR
-        fig_maze[end[0], end[1]] = END_COLOR
+        
+        # S'assurer que les points de départ et d'arrivée sont dans la limite
+        if 0 <= start[0] < grid_size_used and 0 <= start[1] < grid_size_used:
+            fig_maze[start[0], start[1]] = START_COLOR
+        if 0 <= end[0] < grid_size_used and 0 <= end[1] < grid_size_used:
+            fig_maze[end[0], end[1]] = END_COLOR
         
     st.image(fig_maze, caption="Labyrinthe (Mur Gris, Chemin Vert, Début Vert Clair, Fin Rouge)", use_column_width=True)
 
+# --- AFFICHAGE DES GRAPHIQUES ---
 st.header(f"📈 Analyse Odométrique du Capteur : **{config_key}**")
 st.markdown("Les graphiques ci-dessous représentent les signaux bruts et bruités de vos capteurs. Ils sont les données d'entrée typiques pour un filtre de Kalman ou un algorithme de fusion de données.")
 
 if not st.session_state.sensor_data.empty:
     
-    # Récupérer les unités pour les titres des graphiques
     limits_and_units = get_sensor_limits_and_units(config_key)
-    
     data_df = st.session_state.sensor_data.set_index('Temps (s)')
     
     col_chart_1, col_chart_2, col_chart_3 = st.columns(3)
@@ -391,7 +409,7 @@ if not st.session_state.sensor_data.empty:
         st.line_chart(data_df['Capteur 3'])
 
     st.subheader("Données Brutes (Extrait)")
-    st.dataframe(st.session_state.sensor_data.head())
+    st.dataframe(st.session_state.sensor_data.head(10))
 
 else:
     st.info("Lancez la simulation pour visualiser l'analyse des capteurs.")
