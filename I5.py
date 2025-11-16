@@ -281,7 +281,7 @@ def plot_sensor_graphs():
         if data:
             times = [d[0] for d in data]; values = [d[1] for d in data]
             
-            # CORRECTION DE L'ERREUR MATPLOTLIB (ValueError)
+            # Correction de l'erreur Matplotlib (ValueError: unrecognized format specifier)
             ax.plot(times, values, color=COLORS[i], linestyle=LINESTYLE, linewidth=1) 
             
         min_val, max_val, unit = limits_and_units[i]
@@ -298,18 +298,20 @@ def plot_sensor_graphs():
 def load_current_maze():
     """Charge le labyrinthe en cours (pré-défini ou custom) et met à jour les positions S/E."""
     maze_key = st.session_state.maze_name
+    
     if maze_key == 'Construction autonome':
         current_maze = st.session_state.custom_maze_array.copy()
     else:
+        # Si un labyrinthe prédéfini est choisi, assurez-vous de repartir d'une copie propre
         current_maze = st.session_state.mazes.get(maze_key, st.session_state.mazes['Classique (Facile)']).copy()
-    
+        
     # Mettre à jour les positions de départ et d'arrivée dans le labyrinthe chargé
     current_maze[current_maze == 2] = 0 
     current_maze[current_maze == 3] = 0 
     
-    # S'assurer que les coordonnées S/E sont valides (au moins ne sont pas des murs par défaut)
-    s_y, s_x = st.session_state.start_pos[1], st.session_state.start_pos[0]
-    e_y, e_x = st.session_state.end_pos[1], st.session_state.end_pos[0]
+    # S'assurer que les coordonnées S/E sont valides 
+    s_x, s_y = st.session_state.start_pos[0], st.session_state.start_pos[1]
+    e_x, e_y = st.session_state.end_pos[0], st.session_state.end_pos[1]
 
     # Sécurité: S'assurer que S/E sont dans les limites
     if 0 <= s_y < MAZE_SIZE and 0 <= s_x < MAZE_SIZE:
@@ -343,7 +345,8 @@ if 'delay_ms' not in st.session_state: st.session_state.delay_ms = 100
 if 'total_time' not in st.session_state: st.session_state.total_time = 0.0
 if 'history' not in st.session_state: st.session_state.history = []
 if 'stage' not in st.session_state: st.session_state.stage = "Prêt"
-if 'selection_mode' not in st.session_state: st.session_state.selection_mode = None # NOUVEAU: Pour la sélection au clic
+if 'selection_mode' not in st.session_state: st.session_state.selection_mode = None 
+
 
 ALGO_MAP = {
     'Wall following left-hand rule': 'wallFollowLeft',
@@ -355,6 +358,9 @@ ALGO_MAP = {
 }
 
 def run_simulation():
+    # Désactiver la sélection en cours avant de lancer
+    st.session_state.selection_mode = None
+    
     maze = load_current_maze()
     sx, sy = st.session_state.start_pos
     
@@ -394,7 +400,7 @@ def reset():
     st.session_state.sensor_data = {'capteur1': [], 'capteur2': [], 'capteur3': []}
     st.session_state.total_time = 0.0
     st.session_state.stage = "Prêt"
-    st.session_state.selection_mode = None # Réinitialiser le mode de sélection
+    st.session_state.selection_mode = None 
 
 def save_simulation():
     if st.session_state.path_data_optimal and st.session_state.total_time > 0:
@@ -457,7 +463,6 @@ with st.sidebar:
     
     st.subheader("Contrôles")
     if st.button("▶ Lancer la Simulation (3 Passages)"):
-        # Désactiver la sélection si elle est active
         st.session_state.selection_mode = None 
         run_simulation()
     
@@ -482,60 +487,81 @@ with st.sidebar:
 
 # --- UI Principale ---
 
-# Charger le labyrinthe (Résout l'ancienne NameError)
 current_maze = load_current_maze() 
 
-# Onglet pour la construction autonome
-if st.session_state.maze_name == 'Construction autonome':
-    st.title("🔨 Construction de Labyrinthe Autonome")
-    st.markdown("Cliquez sur les cases pour basculer entre **Passage (0)** et **Mur (1)**. (S/E sont gérés par la sélection au clic ou les coordonnées S/E).")
+# -------------------------------------------------------------
+# LOGIQUE DE LA GRILLE INTERACTIVE (SÉLECTION S/E ou CONSTRUCTION)
+# -------------------------------------------------------------
+is_interactive_grid_active = st.session_state.maze_name == 'Construction autonome' or st.session_state.selection_mode is not None
+
+if is_interactive_grid_active:
     
+    if st.session_state.maze_name == 'Construction autonome':
+        st.title("🔨 Construction de Labyrinthe Autonome")
+        st.markdown("Cliquez sur les cases pour basculer entre **Passage (0)** et **Mur (1)**. Utilisez les boutons dans la barre latérale pour sélectionner **Départ/Arrivée**.")
+        current_grid_array = st.session_state.custom_maze_array.copy()
+    else:
+        st.title(f"Sélection de Position : {'Départ' if st.session_state.selection_mode == 'start' else 'Arrivée'}")
+        st.markdown("Cliquez sur une case libre du labyrinthe pour définir la nouvelle position.")
+        current_grid_array = current_maze.copy() # Afficher le labyrinthe prédéfini
+
     cols = st.columns([1] * MAZE_SIZE)
-    current_custom_maze = current_maze.copy() # Utiliser le labyrinthe chargé
 
     for r in range(MAZE_SIZE):
         for c in range(MAZE_SIZE):
-            cell_value = current_custom_maze[r, c]
-            cell_key = f"cell_{r}_{c}"
+            cell_value = current_grid_array[r, c]
+            cell_key = f"grid_cell_{r}_{c}"
             
             # Définir le contenu de la cellule
-            is_start_end = (r == st.session_state.start_pos[1] and c == st.session_state.start_pos[0]) or \
-                           (r == st.session_state.end_pos[1] and c == st.session_state.end_pos[0])
-
-            if cell_value == 2: label = "START"; color = "#EEEEEE"
-            elif cell_value == 3: label = "END"; color = "#F05454"
-            elif cell_value == 1: label = "🧱 Mur"; color = "#00ADB5"
+            is_start_pos = (r == st.session_state.start_pos[1] and c == st.session_state.start_pos[0])
+            is_end_pos = (r == st.session_state.end_pos[1] and c == st.session_state.end_pos[0])
+            is_start_end = is_start_pos or is_end_pos
+            
+            # Définir l'apparence
+            if cell_value == 1: label = "🧱 Mur"; color = "#00ADB5"
+            elif is_start_pos: label = "START"; color = "#EEEEEE"
+            elif is_end_pos: label = "END"; color = "#F05454"
             else: label = "⬜ Passage"; color = "#222831"
             
+            # Ajuster le type de bouton pour la sélection
+            button_type = "primary" if (is_start_pos and st.session_state.selection_mode == 'start') or (is_end_pos and st.session_state.selection_mode == 'end') else "secondary"
+
             with cols[c]:
-                if st.button(label, key=cell_key, help=f"({c}, {r})", use_container_width=True):
+                # On utilise une taille/couleur cohérente avec le mode construction
+                if st.button(label, key=cell_key, help=f"({c}, {r})", use_container_width=True, type=button_type):
                     
-                    # LOGIQUE DE CLIC EN MODE CONSTRUCTION/SÉLECTION
                     if st.session_state.selection_mode is None:
-                        # Si aucun mode de sélection S/E n'est actif, basculer Mur/Passage
-                        if not is_start_end:
+                        # Mode Construction Autonome: Bascule Mur/Passage (si ce n'est pas S/E)
+                        if st.session_state.maze_name == 'Construction autonome' and not is_start_end:
                             st.session_state.custom_maze_array[r, c] = 1 if cell_value == 0 else 0
                             st.rerun() 
                     
-                    # Logique de sélection S/E si un mode est actif et que la case n'est pas un mur (1)
-                    elif current_custom_maze[r, c] != 1:
+                    elif cell_value != 1:
+                        # Mode Sélection S/E: Mettre à jour la position si ce n'est pas un mur
                         if st.session_state.selection_mode == 'start':
                             st.session_state.start_pos = (c, r)
-                            st.session_state.selection_mode = None 
-                            st.rerun()
                         elif st.session_state.selection_mode == 'end':
                             st.session_state.end_pos = (c, r)
-                            st.session_state.selection_mode = None 
-                            st.rerun()
-                        
-    # Forcer la mise à jour des positions S/E dans le custom_maze_array
-    st.session_state.custom_maze_array[st.session_state.custom_maze_array == 2] = 0
-    st.session_state.custom_maze_array[st.session_state.custom_maze_array == 3] = 0
-    st.session_state.custom_maze_array[st.session_state.start_pos[1], st.session_state.start_pos[0]] = 2
-    st.session_state.custom_maze_array[st.session_state.end_pos[1], st.session_state.end_pos[0]] = 3
+                            
+                        st.session_state.selection_mode = None # Désactiver après la sélection
+                        st.rerun()
+                    else:
+                        st.error("Impossible de choisir un Mur comme point de départ ou d'arrivée.")
+
+    # Mise à jour du custom_maze_array après interaction (si on est en mode construction)
+    if st.session_state.maze_name == 'Construction autonome':
+        st.session_state.custom_maze_array[st.session_state.custom_maze_array == 2] = 0
+        st.session_state.custom_maze_array[st.session_state.custom_maze_array == 3] = 0
+        st.session_state.custom_maze_array[st.session_state.start_pos[1], st.session_state.start_pos[0]] = 2
+        st.session_state.custom_maze_array[st.session_state.end_pos[1], st.session_state.end_pos[0]] = 3
+# -------------------------------------------------------------
+# FIN DE LA LOGIQUE DE LA GRILLE INTERACTIVE
+# -------------------------------------------------------------
+
 
 # Onglet Historique
 with st.expander("📂 Historique des Simulations", expanded=False):
+# ... (Logique d'affichage de l'historique conservée) ...
     if not st.session_state.history:
         st.info("Aucune simulation sauvegardée pour l'instant.")
     else:
@@ -558,8 +584,8 @@ with st.expander("📂 Historique des Simulations", expanded=False):
             st.markdown("---")
 
 
-# Affichage principal du labyrinthe et des capteurs (sauf en mode construction)
-if st.session_state.maze_name != 'Construction autonome':
+# Affichage principal du labyrinthe et des capteurs (UNIQUEMENT si la grille interactive n'est PAS active)
+if not is_interactive_grid_active:
     
     st.title("Simulateur Labyrinthe Robotique 🤖")
     
@@ -576,6 +602,7 @@ if st.session_state.maze_name != 'Construction autonome':
         else:
             path_data = st.session_state.path_data_optimal if st.session_state.path_data_optimal else st.session_state.path_data_map
         
+        # Afficher le graphique Matplotlib classique
         fig_maze = plot_maze_and_path(current_maze, path_data, st.session_state.frame, highlight_path=path_to_display)
         st.pyplot(fig_maze)
 
@@ -587,52 +614,6 @@ if st.session_state.maze_name != 'Construction autonome':
         figs = plot_sensor_graphs()
         for f in figs:
             st.pyplot(f)
-
-# --- LOGIQUE DE SÉLECTION AU CLIC POUR LES LABYRINTHES PRÉDÉFINIS ---
-# Créer une grille "invisible" par-dessus le graphe Matplotlib pour capturer les clics
-if st.session_state.maze_name != 'Construction autonome' and st.session_state.selection_mode is not None:
-    
-    # Utilisez une clé unique pour cette grille de boutons invisible
-    selection_cols = st.columns([1] * MAZE_SIZE)
-    
-    # Petite astuce CSS pour que la grille se superpose visuellement au graphique
-    st.markdown(
-        """
-        <style>
-        .stButton>button {
-            height: 100%; /* S'assurer que le bouton prend toute la hauteur de la cellule */
-            opacity: 0.01; /* Rendre le bouton presque invisible */
-            cursor: crosshair; /* Changer le curseur pour indiquer l'interactivité */
-        }
-        </style>
-        """, unsafe_allow_html=True
-    )
-
-    for r in range(MAZE_SIZE):
-        for c in range(MAZE_SIZE):
-            cell_key = f"select_cell_{r}_{c}_overlay"
-            
-            with selection_cols[c]:
-                # On utilise un conteneur temporaire pour forcer le placement dans la colonne
-                temp_container = st.container()
-                
-                with temp_container:
-                    # Le bouton doit avoir une hauteur définie, mais Streamlit n'aime pas le style direct. 
-                    # On se repose sur la hauteur par défaut ou le style CSS ci-dessus pour l'alignement.
-                    if st.button(" ", key=cell_key, use_container_width=True): 
-                        # Vérifier si la position cliquée n'est pas un mur (1)
-                        if current_maze[r, c] != 1:
-                            if st.session_state.selection_mode == 'start':
-                                st.session_state.start_pos = (c, r)
-                                st.session_state.selection_mode = None
-                                st.rerun()
-                            elif st.session_state.selection_mode == 'end':
-                                st.session_state.end_pos = (c, r)
-                                st.session_state.selection_mode = None
-                                st.rerun()
-                        else:
-                            st.error("Impossible de choisir un Mur comme point de départ ou d'arrivée.")
-# ----------------------------------------------------------------------
 
 # --- Auto-play (Passage 3: Exécution Rapide) ---
 if st.session_state.is_running:
