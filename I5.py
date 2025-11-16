@@ -432,7 +432,9 @@ with st.sidebar:
     st.session_state.maze_name = st.selectbox("Labyrinthe", maze_options, index=maze_options.index(st.session_state.maze_name))
     st.session_state.algo = st.selectbox("Algorithme (Passage 1)", list(ALGO_MAP.keys()), index=list(ALGO_MAP.keys()).index(st.session_state.algo))
     st.session_state.config = st.selectbox("Scénario Capteurs", ('Télémétrie', 'Caméras', 'Centrale inertielle', 'Système radar doppler et optique', 'Coordonnées GPS (triangulation)'), index=0)
-    st.session_state.delay_ms = st.slider("Vitesse Simulation (ms/step)", min_value=10, max_value=1000, value=st.session_state.delay_ms, step=10)
+    
+    # NOUVELLE ÉCHELLE DU CURSEUR (10ms à 250ms)
+    st.session_state.delay_ms = st.slider("Vitesse Simulation (ms/step)", min_value=10, max_value=250, value=100, step=10)
 
     st.subheader("Positions S/E")
     
@@ -450,11 +452,15 @@ with st.sidebar:
         is_selecting_s = st.session_state.selection_mode == 'start'
         if st.button("🖱️ Choisir Départ", disabled=st.session_state.is_running, type="primary" if is_selecting_s else "secondary", use_container_width=True):
             st.session_state.selection_mode = 'start' if not is_selecting_s else None
+            # Correction: Forcer le rerun pour afficher la grille interactive
+            if st.session_state.selection_mode: st.rerun() 
     
     with col_e:
         is_selecting_e = st.session_state.selection_mode == 'end'
         if st.button("🖱️ Choisir Arrivée", disabled=st.session_state.is_running, type="primary" if is_selecting_e else "secondary", use_container_width=True):
             st.session_state.selection_mode = 'end' if not is_selecting_e else None
+            # Correction: Forcer le rerun pour afficher la grille interactive
+            if st.session_state.selection_mode: st.rerun() 
             
     if st.session_state.selection_mode:
         st.warning(f"Veuillez cliquer sur une case du labyrinthe pour choisir la position de **{'Départ' if st.session_state.selection_mode == 'start' else 'Arrivée'}**.")
@@ -527,7 +533,7 @@ if is_interactive_grid_active:
             button_type = "primary" if (is_start_pos and st.session_state.selection_mode == 'start') or (is_end_pos and st.session_state.selection_mode == 'end') else "secondary"
 
             with cols[c]:
-                # On utilise une taille/couleur cohérente avec le mode construction
+                # CORRECTION SYNTAXERROR: retrait du guillemet en trop dans le label si cell_value=0
                 if st.button(label, key=cell_key, help=f"({c}, {r})", use_container_width=True, type=button_type):
                     
                     if st.session_state.selection_mode is None:
@@ -621,6 +627,9 @@ if st.session_state.is_running:
     
     if st.session_state.frame < path_len - 1:
         
+        # NOUVEAU : Utilisation du délai pour ralentir l'exécution
+        time.sleep(st.session_state.delay_ms / 1000) 
+        
         st.session_state.frame += 1
         
         t_current = st.session_state.frame * TIME_PER_CELL_MAX_S # Temps estimé
@@ -634,7 +643,7 @@ if st.session_state.is_running:
             if len(st.session_state.sensor_data[k]) > 200:
                 st.session_state.sensor_data[k] = st.session_state.sensor_data[k][-200:]
                 
-        # Pas de time.sleep, on utilise la fonction de délai intrinsèque de Streamlit
+        # Le rerun force Streamlit à rafraîchir l'interface
         st.rerun() 
         
     else:
