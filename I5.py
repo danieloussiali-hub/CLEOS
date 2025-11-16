@@ -346,6 +346,8 @@ if 'total_time' not in st.session_state: st.session_state.total_time = 0.0
 if 'history' not in st.session_state: st.session_state.history = []
 if 'stage' not in st.session_state: st.session_state.stage = "Prêt"
 if 'selection_mode' not in st.session_state: st.session_state.selection_mode = None 
+# NOUVEAU: Temps de la dernière mise à jour pour contrôler la cadence
+if 'last_update_time' not in st.session_state: st.session_state.last_update_time = time.time() 
 
 
 ALGO_MAP = {
@@ -390,6 +392,8 @@ def run_simulation():
     st.session_state.frame = 0
     st.session_state.sensor_data = {'capteur1': [], 'capteur2': [], 'capteur3': []}
     st.session_state.is_running = True
+    # Initialiser le temps de la dernière mise à jour au moment du lancement
+    st.session_state.last_update_time = time.time()
     st.rerun() 
 
 def reset():
@@ -401,6 +405,7 @@ def reset():
     st.session_state.total_time = 0.0
     st.session_state.stage = "Prêt"
     st.session_state.selection_mode = None 
+    st.session_state.last_update_time = time.time()
 
 def save_simulation():
     if st.session_state.path_data_optimal and st.session_state.total_time > 0:
@@ -433,7 +438,7 @@ with st.sidebar:
     st.session_state.algo = st.selectbox("Algorithme (Passage 1)", list(ALGO_MAP.keys()), index=list(ALGO_MAP.keys()).index(st.session_state.algo))
     st.session_state.config = st.selectbox("Scénario Capteurs", ('Télémétrie', 'Caméras', 'Centrale inertielle', 'Système radar doppler et optique', 'Coordonnées GPS (triangulation)'), index=0)
     
-    # NOUVELLE ÉCHELLE DU CURSEUR (10ms à 250ms)
+    # Échelle du curseur ajustée : 10ms (rapide) à 250ms (lent) pour respecter les contraintes de temps.
     st.session_state.delay_ms = st.slider("Vitesse Simulation (ms/step)", min_value=10, max_value=250, value=100, step=10)
 
     st.subheader("Positions S/E")
@@ -533,7 +538,7 @@ if is_interactive_grid_active:
             button_type = "primary" if (is_start_pos and st.session_state.selection_mode == 'start') or (is_end_pos and st.session_state.selection_mode == 'end') else "secondary"
 
             with cols[c]:
-                # CORRECTION SYNTAXERROR: retrait du guillemet en trop dans le label si cell_value=0
+                # On utilise une taille/couleur cohérente avec le mode construction
                 if st.button(label, key=cell_key, help=f"({c}, {r})", use_container_width=True, type=button_type):
                     
                     if st.session_state.selection_mode is None:
@@ -625,28 +630,37 @@ if not is_interactive_grid_active:
 if st.session_state.is_running:
     path_len = len(st.session_state.path_data_optimal['path'])
     
-    if st.session_state.frame < path_len - 1:
+    # Récupérer le temps actuel et le délai désiré par l'utilisateur (en secondes)
+    current_time = time.time()
+    delay_s = st.session_state.delay_ms / 1000.0
+    
+    # Condition pour l'avancement : le temps écoulé doit être supérieur au délai demandé
+    if current_time - st.session_state.last_update_time >= delay_s:
         
-        # NOUVEAU : Utilisation du délai pour ralentir l'exécution
-        time.sleep(st.session_state.delay_ms / 1000) 
-        
-        st.session_state.frame += 1
-        
-        t_current = st.session_state.frame * TIME_PER_CELL_MAX_S # Temps estimé
-        
-        d1, d2, d3 = generate_sensor_data(current_maze, st.session_state.config, st.session_state.path_data_optimal, st.session_state.frame)
-        st.session_state.sensor_data['capteur1'].append((t_current, d1))
-        st.session_state.sensor_data['capteur2'].append((t_current, d2))
-        st.session_state.sensor_data['capteur3'].append((t_current, d3))
-        
-        for k in st.session_state.sensor_data:
-            if len(st.session_state.sensor_data[k]) > 200:
-                st.session_state.sensor_data[k] = st.session_state.sensor_data[k][-200:]
-                
-        # Le rerun force Streamlit à rafraîchir l'interface
-        st.rerun() 
-        
+        if st.session_state.frame < path_len - 1:
+            
+            st.session_state.frame += 1
+            st.session_state.last_update_time = current_time # Mettre à jour le temps de la dernière exécution
+
+            t_current = st.session_state.frame * TIME_PER_CELL_MAX_S # Temps estimé
+            
+            d1, d2, d3 = generate_sensor_data(current_maze, st.session_state.config, st.session_state.path_data_optimal, st.session_state.frame)
+            st.session_state.sensor_data['capteur1'].append((t_current, d1))
+            st.session_state.sensor_data['capteur2'].append((t_current, d2))
+            st.session_state.sensor_data['capteur3'].append((t_current, d3))
+            
+            for k in st.session_state.sensor_data:
+                if len(st.session_state.sensor_data[k]) > 200:
+                    st.session_state.sensor_data[k] = st.session_state.sensor_data[k][-200:]
+                    
+            # Le rerun force Streamlit à rafraîchir l'interface immédiatement.
+            st.rerun() 
+            
+        else:
+            st.session_state.is_running = False
+            st.session_state.stage = "Terminé"
+            st.rerun()
+    
+    # Si le temps n'est pas écoulé, on lance un rerun pour vérifier à nouveau rapidement (animation)
     else:
-        st.session_state.is_running = False
-        st.session_state.stage = "Terminé"
         st.rerun()
