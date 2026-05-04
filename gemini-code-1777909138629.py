@@ -99,6 +99,9 @@ with t1:
         else:
             st.info("Lancez un scan ou importez un CSV pour voir l'aperçu.")
 
+
+        st.warning("Aucune donnée disponible. Veuillez scanner ou importer un fichier.")
+
 with t2:
     st.subheader("Traitement et Export")
     
@@ -115,32 +118,27 @@ with t2:
         m2.metric("Distance Min", f"{df['distance'].min():.1f}")
         m3.metric("Distance Max", f"{df['distance'].max():.1f}")
 
-        # Conversion Sphérique vers Cartésienne pour Visualisation 3D
-        # On suppose que 'distance' est le rayon r
+        # Visualisation avec Matplotlib (Déjà présent dans tes logs)
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(10, 7))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Conversion simple pour le rendu
         theta = np.radians(df['x'])
         phi = np.radians(df['y'])
         r = df['distance']
+        
+        xs = r * np.sin(phi) * np.cos(theta)
+        ys = r * np.sin(phi) * np.sin(theta)
+        zs = r * np.cos(phi)
 
-        df['X_coord'] = r * np.sin(phi) * np.cos(theta)
-        df['Y_coord'] = r * np.sin(phi) * np.sin(theta)
-        df['Z_coord'] = r * np.cos(phi)
-
-        # Plot 3D
-        fig_3d = go.Figure(data=[go.Scatter3d(
-            x=df['X_coord'], y=df['Y_coord'], z=df['Z_coord'],
-            mode='markers',
-            marker=dict(
-                size=3,
-                color=df['distance'],
-                colorscale='Viridis',
-                opacity=0.8
-            )
-        )])
-        fig_3d.update_layout(title="Nuage de points 3D", height=700)
-        st.plotly_chart(fig_3d, use_container_width=True)
+        img = ax.scatter(xs, ys, zs, c=df['distance'], cmap='viridis')
+        fig.colorbar(img, ax=ax, label='Distance')
+        ax.set_title("Nuage de points 3D (Matplotlib)")
+        
+        st.pyplot(fig)
 
         # Bouton d'export
         csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Télécharger les données traitées", csv, "scan_3d_processed.csv", "text/csv")
-    else:
-        st.warning("Aucune donnée disponible. Veuillez scanner ou importer un fichier.")
+        st.download_button("Télécharger CSV", csv, "scan_3d.csv", "text/csv")
